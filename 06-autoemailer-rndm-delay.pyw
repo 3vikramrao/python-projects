@@ -5,6 +5,9 @@ from pathlib import Path
 import win32com.client as win32
 import os
 import gc
+import time
+import random
+from datetime import datetime, timedelta
 
 # ============================================================
 # GLOBALS
@@ -13,6 +16,7 @@ import gc
 df = None
 current_file_path = None
 last_loaded_timestamp = None
+auto_running = False
 
 # ============================================================
 # FILE TIMESTAMP
@@ -154,66 +158,65 @@ def replace_tokens(text, row):
 # OUTLOOK DRAFT
 # ============================================================
 
-def create_draft(row):
+def create_draft(row, send_email=False):
 
     try:
 
         outlook = win32.Dispatch("Outlook.Application")
 
         subject_template = subject_box.get()
+        body_template = body_box.get("1.0", tk.END)
 
-        body_template = body_box.get(
-            "1.0",
-            tk.END
-        )
+        subject = replace_tokens(subject_template, row)
+        body = replace_tokens(body_template, row)
 
-        subject = replace_tokens(
-            subject_template,
-            row
-        )
-
-        body = replace_tokens(
-            body_template,
-            row
-        )
-
-        email = str(
-            row[email_col_var.get()]
-        )
+        email = str(row[email_col_var.get()])
 
         mail = outlook.CreateItem(0)
 
-        # Force Outlook to load default signature
+        # Load default signature
         mail.Display()
         existing_signature = mail.HTMLBody
-
-        mail.To = email
-        mail.Subject = subject
-
-        mail.HTMLBody = f"""
-        <html>
-        <body style='font-family:Calibri;font-size:11pt'>
-        {body.replace(chr(10), '<br>')}
-        </body>
-        </html>
-        """
 
         formatted_body = "<br>".join(
             line.rstrip()
             for line in body.strip().splitlines()
         )
 
-        mail.HTMLBody = (
-            formatted_body
-            + existing_signature
-        )
-        mail.Display()
+        if simulation_mode.get():
+            mail.To = "your.email@company.com"
+        else:
+            mail.To = email
+        if simulation_mode.get():
+            mail.Subject = "[SIMULATION] " + subject
+        else:
+            mail.Subject = subject
+        mail.HTMLBody = formatted_body + existing_signature
 
+        if send_email:
+
+            if simulation_mode.get():
+
+                mail.Save()
+
+                status_var.set(
+                    f"SIMULATION: Draft created for {email}"
+                )
+
+            else:
+                print(
+                    f"Sending to {email}"
+                )
+
+                mail.Send()
+
+        else:
+
+            mail.Display()
     except Exception as e:
-
         messagebox.showerror(
-            "Outlook Error",
-            str(e)
+        "Outlook Error",
+        str(e)
         )
 
 # ============================================================
@@ -365,6 +368,81 @@ SUBJECT:
 
         create_draft(row)
 
+    def auto_send_loop():
+
+        global auto_running
+
+        if not auto_running:
+            return
+
+        try:
+
+            row = df.iloc[current_idx[0]]
+
+            # Create and send email
+            delay = random.randint(60, 300)
+            create_draft(
+                row,
+                send_email=True
+            )
+
+            status_var.set(
+                f"Email sent. Next email in {delay} seconds."
+            )
+
+            if current_idx[0] < len(df) - 1:
+
+                current_idx[0] += 1
+
+                refresh()
+                
+                print(
+                    f"Waiting {delay} seconds before next email"
+                )
+                popup.after(
+                    1000,
+                    auto_send_loop
+                )
+            else:
+
+                auto_running = False
+                messagebox.showinfo(
+                    "Completed",
+                    "All emails queued successfully."
+                )
+
+        except Exception as e:
+
+            auto_running = False
+
+            messagebox.showerror(
+                "Automation Error",
+                str(e)
+            )
+
+
+    def start_auto():
+
+        global auto_running
+
+        if auto_running:
+            return
+
+        auto_running = True
+
+        auto_send_loop()
+
+
+    def pause_auto():
+
+        global auto_running
+
+        auto_running = False
+
+        status_var.set(
+            "Automation paused"
+        )
+
     tk.Button(
         button_frame,
         text="Previous",
@@ -397,6 +475,29 @@ SUBJECT:
         padx=10
     )
 
+    tk.Button(
+        button_frame,
+        text="Auto",
+        bg="blue",
+        fg="white",
+        command=start_auto
+    ).grid(
+        row=0,
+        column=3,
+        padx=10
+    )
+
+    tk.Button(
+        button_frame,
+        text="Pause",
+        bg="orange",
+        command=pause_auto
+    ).grid(
+        row=0,
+        column=4,
+        padx=10
+    )
+
 # ============================================================
 # START PROCESS
 # ============================================================
@@ -425,49 +526,20 @@ def start_process():
             str(e)
         )
 
-# -------------------------------------------------------------------
-# ABOUT
-# -------------------------------------------------------------------
-def show_about():
-    messagebox.showinfo(
-        "About",
-        "Outlook Automate (Pro Reload)\n"
-        "Version 1.03\n\n"
-        "Developed in Python using Microsoft Copilot\n\n"
-        "Author: Trivikram Rao\n"
-        "Employee ID: 1000030673\n\n"
-        "© 2026 All Rights Reserved"
-    )
 # ============================================================
 # GUI
 # ============================================================
 
 root = tk.Tk()
+simulation_mode = tk.BooleanVar(value=True)
 
 root.title(
     "Outlook Mail Merge Assistant"
 )
 
-root.geometry("1050x650")
-root.minsize(1050, 650)
+root.geometry("1000x900")
+root.minsize(1000, 900)
 
-# -------------------------------------------------------------------
-# MENU BAR
-# -------------------------------------------------------------------
-menu_bar = tk.Menu(root)
-
-help_menu = tk.Menu(menu_bar, tearoff=0)
-help_menu.add_command(
-    label="About",
-    command=show_about
-)
-
-menu_bar.add_cascade(
-    label="Help",
-    menu=help_menu
-)
-
-root.config(menu=menu_bar)
 excel_path_var = tk.StringVar()
 status_var = tk.StringVar()
 start_row_var = tk.StringVar(value="1")
@@ -693,6 +765,13 @@ tk.Button(
     command=start_process
 ).grid(row=0, column=1, padx=10)
 
+tk.Checkbutton(
+    root,
+    text="Simulation Mode (Drafts Only - No Emails Sent)",
+    variable=simulation_mode,
+    fg="blue"
+).pack(pady=5)
+
 # ============================================================
 # STATUS
 # ============================================================
@@ -701,12 +780,5 @@ tk.Label(
     root,
     textvariable=status_var
 ).pack()
-
-tk.Label(
-    root,
-    text="© Trivikram Rao (Emp ID: 1000030673) | v1.03 | Python + Microsoft Copilot",
-    font=("Segoe UI", 8),
-    fg="darkgray"
-).pack(side="bottom", anchor="e", padx=5)
 
 root.mainloop()
